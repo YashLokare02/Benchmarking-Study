@@ -268,7 +268,7 @@ def run_vqd_on_hardware(matrix, ansatz, optimizer, seed, shots, backend):
     sampler = Sampler()
     fidelity = ComputeUncompute(sampler)
 
-    # Run the VQE algorithm
+    # Run the VQD algorithm
     @dataclass
     class VQDLog:
         values: list = None
@@ -447,12 +447,12 @@ def estimate_resources(matrix, zeromode_classic, optimizers, num_qubits, target_
                 function_calls = []  # To track the number of function calls for each run
                 all_zeromodes = []  # To store all zeromodes for the depth
 
-                # Perform multiple independent VQE runs to calculate average fidelity
+                # Perform multiple independent VQD runs to calculate average fidelity
                 for run in range(10):  # Number of independent runs
-                    # Set a seed for a specific VQE run
+                    # Set a seed for a specific VQD run
                     seed = run + 1
 
-                    # Run VQE
+                    # Run VQD
                     zeromode, fidelity_value, function_call_count = run_vqd(
                         matrix=matrix, ansatz=ansatz, optimizer=optimizer, seed=seed,
                         zeromode_exact=zeromode_classic)
@@ -556,7 +556,7 @@ def schlogl_hardware_experiments(matrix, optimizers, fixed_depth, fixed_shots, b
                 # Set a unique seed for reproducibility
                 seed = run + 1
 
-                # Run the VQE algorithm for the specific seed
+                # Run the VQD algorithm for the specific seed
                 eigenvalue, zeromode, func_calls = run_vqd_on_hardware(matrix, ansatz, optimizer, seed, fixed_shots, backend)
 
                 # Log the current result
