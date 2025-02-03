@@ -322,7 +322,7 @@ def analyze_ansatz_performance_mutiple_depths_schlogl_model(matrix, zeromode_cla
             all_zeromodes = []  # To store all zeromodes for the depth
             all_eigenvalues = [] # to store all the eigenvalues
 
-            # Perform multiple independent VQE runs to calculate fidelity and resource usage
+            # Perform multiple independent VQD runs to calculate fidelity and resource usage
             for run in range(10):  # Number of independent runs
                 seed = run + 1  # Set a unique seed for each run
 
