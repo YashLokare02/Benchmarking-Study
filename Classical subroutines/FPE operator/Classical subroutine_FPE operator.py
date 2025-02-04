@@ -1,4 +1,4 @@
-Author: Yash Lokare and Dingding Wei
+## Authors: Yash Lokare and Dingding Wei
 
 ## Importing relevant libraries
 
