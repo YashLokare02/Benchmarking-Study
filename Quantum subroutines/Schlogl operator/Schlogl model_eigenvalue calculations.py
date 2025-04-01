@@ -303,7 +303,7 @@ def run_vqd_for_eigenvalues(matrix, ansatz, optimizer, seed):
 
 ## Estimate quantum resources (accuracy threshold pertains to \lambda_1) --- discussed in the main text
 
-def estimate_resources_first_eigenvalue(matrix, optimizers, num_qubits, target_relative_error_threshold, exact_second_eigenvalue):
+def estimate_resources_first_eigenvalue_vqd(matrix, optimizers, num_qubits, target_relative_error_threshold, exact_second_eigenvalue):
     """
     Computes the minimum ansatz depth required to achieve a target relative error threshold for the second eigenvalue
     for a set of optimizers and ansatz types. For each optimizer-ansatz pair, at the minimum depth that achieves
@@ -1133,7 +1133,7 @@ def run_ssvqe(matrix, ansatz, optimizer, seed):
     return zeromode, eigenvalues_ssvqe, gate_count, circuit_depth, num_func_calls
 
 ## Estimating resource requirements for the SSVQE algorithm
-def estimate_resources(matrix, optimizers, num_qubits, target_relative_error_threshold, exact_second_eigenvalue):
+def estimate_resources_first_eigenvalue_ssvqe(matrix, optimizers, num_qubits, target_relative_error_threshold, exact_second_eigenvalue):
     """
     Computes the minimum ansatz depth required to achieve a target relative error threshold for the second eigenvalue
     for a set of optimizers and ansatz types. For each optimizer-ansatz pair, at the minimum depth that achieves
