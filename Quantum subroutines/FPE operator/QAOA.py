@@ -51,9 +51,6 @@ from qiskit_aer import AerSimulator
 # from qiskit_aer.primitives import Estimator as AerEstimator
 # from qiskit_aer.noise import NoiseModel
 
-# Import the FakeManila backend
-from qiskit_ibm_runtime.fake_provider import FakeManilaV2, FakeMontrealV2, FakeGuadalupeV2, FakeManila
-
 ## QAOA implementation
 def cost_func_estimator(params, ansatz, hamiltonian, estimator):
     # Function to implement the cost function (with the SLSQP optimizer)
