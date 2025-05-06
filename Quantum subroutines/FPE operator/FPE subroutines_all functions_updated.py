@@ -643,3 +643,102 @@ def compute_fidelity(single_qubit_gates, two_qubit_gates, n_qubits):
     F = (1 - e_q1)**single_qubit_gates * (1 - e_q2)**two_qubit_gates * (1 - e_q)**n_qubits
 
     return F
+
+def performance_metrics_vqe(matrix, zeromode_classic, pair_depth_dict, classical_expectation, target_error_threshold, nmax, L):
+    """
+    Estimate VQE resource usage and relative error statistics for given optimizer-ansatz pairs at fixed depths.
+    
+    Parameters:
+    - matrix: Hamiltonian matrix
+    - zeromode_classic: exact classical solution
+    - pair_depth_dict: dict of form {'SLSQP-RealAmplitudes': 2, 'P_BFGS-EfficientSU2': 3, ...}
+    - classical_expectation: expectation operator for computing observable (like <x^2>)
+    - nmax, L: problem parameters
+
+    Returns:
+    - error_stats: dict with mean and std of relative error for each pair
+    - resource_info: dict with function call count, gate count, and circuit depth for each pair
+    """
+
+    # Get the qubit number 
+    dimension = matrix.shape[0]
+    num_qubits = int(np.log2(dimension))
+    
+    # Mapping of names to classes
+    optimizer_map = {
+        "SLSQP": SLSQP,
+        "P_BFGS": P_BFGS
+    }
+
+    ansatz_map = {
+        "RealAmplitudes": RealAmplitudes,
+        "TwoLocal": TwoLocal,
+        "EfficientSU2": EfficientSU2,
+    }
+
+    # Initialize
+    expectation_stats = {}
+
+    for pair_name, depth in pair_depth_dict.items():
+        print(f"\nRunning VQE for: {pair_name} with depth {depth}")
+
+        # Split pair_name to get optimizer and ansatz
+        opt_name, ansatz_name = pair_name.split('-')
+        optimizer_class = optimizer_map[opt_name]
+        AnsatzClass = ansatz_map[ansatz_name]
+
+        # Instantiate optimizer with correct stopping condition
+        if opt_name == "P_BFGS":
+            optimizer = optimizer_class(maxfun=5000)
+        else:
+            optimizer = optimizer_class(maxiter=5000)
+
+        # Initialize ansatz
+        if AnsatzClass == RealAmplitudes:
+            ansatz = AnsatzClass(num_qubits=num_qubits, entanglement='full', reps=depth)
+        elif AnsatzClass == TwoLocal:
+            ansatz = AnsatzClass(num_qubits=num_qubits, rotation_blocks=['ry'],
+                                 entanglement_blocks='cx', reps=depth)
+        elif AnsatzClass == EfficientSU2:
+            ansatz = AnsatzClass(num_qubits=num_qubits, su2_gates=['ry'],
+                                 entanglement='sca', reps=depth)
+
+        # Run 10 independent VQE runs
+        all_quantum_expectations = []
+        all_function_calls = []
+        count = 0
+
+        for run in range(10):
+            seed = run + 1
+
+            zeromode, fidelity_value, quantum_expectation, error, function_call_count = run_vqe_ansatz_analysis(
+                matrix=matrix,
+                ansatz=ansatz,
+                optimizer=optimizer,
+                seed=seed,
+                exact_ground_state=zeromode_classic,
+                classical_expectation=classical_expectation,
+                nmax=nmax,
+                L=L
+            )
+
+            all_quantum_expectations.append(quantum_expectation)
+            all_function_calls.append(function_call_count)
+
+            # Determine the success ratio
+            if error <= target_error_threshold:
+                count += 1
+
+        # Compute stats
+        std_expectation = np.std(all_quantum_expectations)
+        success_ratio = count / 10 # compute the success ratio
+
+        # Store results
+        expectation_stats[pair_name] = {
+            'std_expectation': std_expectation, 
+            'success_ratio': success_ratio
+        }
+
+        print(f"{pair_name} — Std Dev: {std_expectation:.5f}, Sucess ratio: {success_ratio:.5f}")
+
+    return expectation_stats
