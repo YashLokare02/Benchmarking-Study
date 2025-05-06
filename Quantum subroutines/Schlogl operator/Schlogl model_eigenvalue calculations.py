@@ -413,6 +413,108 @@ def estimate_resources_first_eigenvalue_vqd(matrix, optimizers, num_qubits, targ
 
     return min_depths, eigenvalues, metrics
 
+def performance_metrics_vqd(matrix, classical_eigenvalue, targer_error_threshold, pair_depth_dict):
+    """
+    Estimate VQE resource usage and relative error statistics for given optimizer-ansatz pairs at fixed depths.
+    
+    Parameters:
+    - matrix: Hamiltonian matrix
+    - pair_depth_dict: dict of form {'SLSQP-RealAmplitudes': 2, 'P_BFGS-EfficientSU2': 3, ...}
+    - classical_eigenvalue: first eigenvalue obtained via exact diagonalization
+    - target_error_threshold: relative error threshold to be reached (to determine success probability)
+
+    Returns:
+    - error_stats: dict with mean and std of relative error for each pair
+    - resource_info: dict with function call count, gate count, and circuit depth for each pair
+    """
+
+    # Get the qubit number 
+    dimension = matrix.shape[0]
+    num_qubits = int(np.log2(dimension))
+    
+    # Mapping of names to classes
+    optimizer_map = {
+        "SLSQP": SLSQP,
+        "P_BFGS": P_BFGS
+    }
+
+    ansatz_map = {
+        "RealAmplitudes": RealAmplitudes,
+        "TwoLocal": TwoLocal,
+        "EfficientSU2": EfficientSU2,
+    }
+
+    # Initialize
+    eigenvalue_stats = {}
+
+    for pair_name, depth in pair_depth_dict.items():
+        print(f"\nRunning VQD for: {pair_name} with depth {depth}")
+
+        # Split pair_name to get optimizer and ansatz
+        opt_name, ansatz_name = pair_name.split('-')
+        optimizer_class = optimizer_map[opt_name]
+        AnsatzClass = ansatz_map[ansatz_name]
+
+        # Instantiate optimizer with correct stopping condition
+        if opt_name == "P_BFGS":
+            optimizer = optimizer_class(maxfun=5000)
+        else:
+            optimizer = optimizer_class(maxiter=5000)
+
+        # Initialize ansatz
+        if AnsatzClass == RealAmplitudes:
+            ansatz = AnsatzClass(num_qubits=num_qubits, entanglement='full', reps=depth)
+        elif AnsatzClass == TwoLocal:
+            ansatz = AnsatzClass(num_qubits=num_qubits, rotation_blocks=['ry'],
+                                 entanglement_blocks='cx', reps=depth)
+        elif AnsatzClass == EfficientSU2:
+            ansatz = AnsatzClass(num_qubits=num_qubits, su2_gates=['ry'],
+                                 entanglement='sca', reps=depth)
+
+        # Run 10 independent VQD runs
+        all_eigenvalues = []
+        all_errors = []
+        count = 0 # to determine the success probability
+
+        for run in range(10):
+            seed = run + 1
+
+            _, eigenvalues_vqd, _, _, _ = run_vqd(
+                matrix=matrix,
+                ansatz=ansatz,
+                optimizer=optimizer,
+                seed=seed,
+            )
+
+            # Get the first eigenvalue and store accordingly; also compute the relative error and store
+            quantum_eigenvalue = eigenvalues_vqd[1]
+            all_eigenvalues.append(quantum_eigenvalue)
+            relative_error = np.abs((quantum_eigenvalue - classical_eigenvalue) / classical_eigenvalue)
+            all_errors.append(relative_error)
+
+            # Determine success probability
+            if relative_error <= target_error_threshold: 
+                count += 1
+            
+        # Compute stats
+        std_eigenvalue = np.std(all_eigenvalues)
+        success_probability = count / 10
+
+        # Determine the lowest relative error in \lambda_1
+        lowest_error = np.min(all_errors)
+
+        # Store results
+        eigenvalue_stats[pair_name] = {
+            'std_eigenvalue': std_eigenvalue, 
+            'lowest_error': lowest_error, 
+            'success probability': success_probability
+        }
+
+        print(f"{pair_name} — Std Dev: {std_eigenvalue:.5f}, Lowest relative error: {lowest_error:.5f}, \
+        Success probability: {success_probability:.5f}")
+
+    return eigenvalue_stats
+
 ###########################################################################################################################################################
 ## SSVQE 
 ## Importing relevant libraries
@@ -1242,3 +1344,105 @@ def estimate_resources_first_eigenvalue_ssvqe(matrix, optimizers, num_qubits, ta
                 print(f"{pair_name} did not converge within {max_depth} depths.")
 
     return min_depths, eigenvalues, metrics
+
+def performance_metrics_ssvqe(matrix, classical_eigenvalue, target_error_threshold, pair_depth_dict):
+    """
+    Estimate VQE resource usage and relative error statistics for given optimizer-ansatz pairs at fixed depths.
+    
+    Parameters:
+    - matrix: Hamiltonian matrix
+    - pair_depth_dict: dict of form {'SLSQP-RealAmplitudes': 2, 'P_BFGS-EfficientSU2': 3, ...}
+    - classical_eigenvalue: first eigenvalue obtained via exact diagonalization
+    - target_error_threshold: target error threshold to be reached (to determine the success probability)
+
+    Returns:
+    - error_stats: dict with mean and std of relative error for each pair
+    - resource_info: dict with function call count, gate count, and circuit depth for each pair
+    """
+
+    # Get the qubit number 
+    dimension = matrix.shape[0]
+    num_qubits = int(np.log2(dimension))
+    
+    # Mapping of names to classes
+    optimizer_map = {
+        "SLSQP": SLSQP,
+        "P_BFGS": P_BFGS
+    }
+
+    ansatz_map = {
+        "RealAmplitudes": RealAmplitudes,
+        "TwoLocal": TwoLocal,
+        "EfficientSU2": EfficientSU2,
+    }
+
+    # Initialize
+    eigenvalue_stats = {}
+
+    for pair_name, depth in pair_depth_dict.items():
+        print(f"\nRunning SSVQE for: {pair_name} with depth {depth}")
+
+        # Split pair_name to get optimizer and ansatz
+        opt_name, ansatz_name = pair_name.split('-')
+        optimizer_class = optimizer_map[opt_name]
+        AnsatzClass = ansatz_map[ansatz_name]
+
+        # Instantiate optimizer with correct stopping condition
+        if opt_name == "P_BFGS":
+            optimizer = optimizer_class(maxfun=5000)
+        else:
+            optimizer = optimizer_class(maxiter=5000)
+
+        # Initialize ansatz
+        if AnsatzClass == RealAmplitudes:
+            ansatz = AnsatzClass(num_qubits=num_qubits, entanglement='full', reps=depth)
+        elif AnsatzClass == TwoLocal:
+            ansatz = AnsatzClass(num_qubits=num_qubits, rotation_blocks=['ry'],
+                                 entanglement_blocks='cx', reps=depth)
+        elif AnsatzClass == EfficientSU2:
+            ansatz = AnsatzClass(num_qubits=num_qubits, su2_gates=['ry'],
+                                 entanglement='sca', reps=depth)
+
+        # Run 10 independent SSVQE runs
+        all_eigenvalues = []
+        all_errors = []
+        count = 0 # to determine the success probability
+
+        for run in range(10):
+            seed = run + 1
+
+            _, eigenvalues_vqd, _, _, _ = run_ssvqe(
+                matrix=matrix,
+                ansatz=ansatz,
+                optimizer=optimizer,
+                seed=seed,
+            )
+
+            # Get the first eigenvalue and store accordingly; also compute the relative error and store
+            quantum_eigenvalue = eigenvalues_vqd[1]
+            all_eigenvalues.append(quantum_eigenvalue)
+            relative_error = np.abs((quantum_eigenvalue - classical_eigenvalue) / classical_eigenvalue)
+            all_errors.append(relative_error)
+
+            # Determine success probability
+            if relative_error <= target_error_threshold: 
+                count += 1
+            
+        # Compute stats
+        std_eigenvalue = np.std(all_eigenvalues)
+        success_probability = count / 10
+
+        # Determine the lowest relative error in \lambda_1
+        lowest_error = np.min(all_errors)
+
+        # Store results
+        eigenvalue_stats[pair_name] = {
+            'std_eigenvalue': std_eigenvalue, 
+            'lowest_error': lowest_error, 
+            'success_probability': success_probability
+        }
+
+        print(f"{pair_name} — Std Dev: {std_eigenvalue:.5f}, Lowest relative error: {lowest_error:.5f}, \
+        Success probability: {success_probability:.5f}")
+
+    return eigenvalue_stats
