@@ -200,7 +200,12 @@ def compute_errors(expect_classical, expect_quantum):
 
 ## VQE implementation (state vector simulations)
 
-def run_vqe_ansatz_analysis(matrix, ansatz, optimizer, seed, exact_ground_state):
+# VQE run for a given ansatz and optimizer
+def run_vqe_ansatz_analysis(matrix, ansatz, optimizer, seed, exact_ground_state, classical_expectation, nmax, L):
+
+    # Define parameters to compute <x^2>
+    dx = 0.01
+    x = np.linspace(-4, 4, int(8/dx))
 
     # Get the Pauli-decomposed form of the operator
     qub_hamiltonian = SparsePauliOp.from_operator(matrix)
@@ -222,9 +227,9 @@ def run_vqe_ansatz_analysis(matrix, ansatz, optimizer, seed, exact_ground_state)
         def update(self, count, parameters, mean, _metadata):
             self.values.append(mean)
             self.parameters.append(parameters)
-
+            
     log = VQELog([], [])
-
+    
     # Run VQE with the given ansatz and optimizer
     vqe = VQE(estimator, ansatz, optimizer, initial_point=initial_point, callback=log.update)
 
@@ -232,7 +237,7 @@ def run_vqe_ansatz_analysis(matrix, ansatz, optimizer, seed, exact_ground_state)
     result = vqe.compute_minimum_eigenvalue(qub_hamiltonian)
 
     # Get the number of optimizer function calls
-    num_calls = len(log.values)
+    num_calls = result.cost_function_evals
 
     # Extract the optimal parameters and construct the state vector
     optimal_params = result.optimal_point
@@ -247,18 +252,23 @@ def run_vqe_ansatz_analysis(matrix, ansatz, optimizer, seed, exact_ground_state)
         vqe_statevector = vqe_statevector[:6]
         zeromode = np.array(vqe_statevector).reshape((len(exact_ground_state), 1))
         zeromode = np.real(zeromode)
-
+    
         # Compute the fidelity measure
         fidelity_value = get_similarity(exact_ground_state, zeromode)
-
+    
     else:
         zeromode = np.array(vqe_statevector).reshape((len(exact_ground_state), 1))
         zeromode = np.real(zeromode)
-
+    
         # Compute the fidelity measure
         fidelity_value = get_similarity(exact_ground_state, zeromode)
 
-    return zeromode, fidelity_value, num_calls
+    # Compute <x^2>
+    x_quantum, y_quantum = get_pdf(nmax, x, dx, L, shift = 0, zeromode_qpe = zeromode, normalize = True, make_even = True)
+    quantum_expectation = compute_expectation_x_squared_simpson(x_quantum, y_quantum, 2)
+    error = compute_errors(classical_expectation, quantum_expectation)
+    
+    return zeromode, fidelity_value, error, num_calls
 
 ## VQE implementation (hardware experiments)
 
@@ -355,21 +365,21 @@ def get_zeromode(nmax, a, c, L, gamma):
 
 ## Estimate quantum resources (state vector simulations)
 
-def estimate_resources(matrix, zeromode_classic, optimizers, num_qubits, target_fidelity_threshold):
-
+def estimate_resources(matrix, zeromode_classic, optimizers, num_qubits, target_error_threshold, classical_expectation, nmax, L):
+    
     # Initial depth and maximum depth
     initial_depth = 1
     max_depth = 10  # Set the maximum number of depths to check
 
     # Initialize dictionaries to store minimum depths, zeromodes, and resources for each optimizer-ansatz pair
     min_depths = {}
-    zeromodes = {}
+    relative_errors = {}
     resource_info = {}  # To store gate count, circuit depth, and function calls
-
+    
     # Loop through each optimizer
     for optimizer in optimizers:
         optimizer_name = optimizer.__class__.__name__
-
+        
         # Loop through each ansatz type and configure dynamically
         for AnsatzClass in [RealAmplitudes, TwoLocal, EfficientSU2]:
             # Initialize ansatz with appropriate configurations
@@ -379,90 +389,91 @@ def estimate_resources(matrix, zeromode_classic, optimizers, num_qubits, target_
                 ansatz = AnsatzClass(num_qubits=num_qubits, rotation_blocks=['ry'], entanglement_blocks='cx', reps=initial_depth)
             elif AnsatzClass == EfficientSU2:
                 ansatz = AnsatzClass(num_qubits=num_qubits, su2_gates=['ry'], entanglement='sca', reps=initial_depth)
-
+            
             ansatz_name = AnsatzClass.__name__
             pair_name = f"{optimizer_name}-{ansatz_name}"
             print(f"\nRunning VQE for optimizer-ansatz pair: {pair_name}")
-
+            
             current_depth = initial_depth
             converged = False  # Flag to check if convergence occurs
-
+            
             while current_depth <= max_depth:  # Loop for up to max_depth
                 # Set `reps` (depth) for the current ansatz
                 ansatz.reps = current_depth
-
-                # Temporary storage for the fidelity results
+                
+                # Temporary storage for the relative error results
                 fidelities = []
                 function_calls = []  # To track the number of function calls for each run
-                all_zeromodes = []  # To store all zeromodes for the depth
-
-                # Perform multiple independent VQE runs to calculate average fidelity
+                all_relative_errors = [] # To store all the relative errors
+                
+                # Perform multiple independent VQE runs to calculate average relative error
                 for run in range(10):  # Number of independent runs
                     # Set a seed for a specific VQE run
                     seed = run + 1
-
+                    
                     # Run VQE
-                    zeromode, fidelity_value, function_call_count = run_vqe_ansatz_analysis(
+                    zeromode, fidelity_value, error, function_call_count = run_vqe_ansatz_analysis(
                         matrix=matrix, ansatz=ansatz, optimizer=optimizer, seed=seed,
-                        exact_ground_state=zeromode_classic)
-
-                    # Append the fidelity result and function call count
+                        exact_ground_state=zeromode_classic, classical_expectation=classical_expectation, \
+                        nmax=nmax, L=L)
+                    
+                    # Append the relative error and function call count
                     fidelities.append(fidelity_value)
                     function_calls.append(function_call_count)
-                    all_zeromodes.append(zeromode)
-
+                    all_relative_errors.append(error)
+                
                 # Calculate the average fidelity over the runs
-                average_fidelity = np.mean(fidelities)
-                print(f"{pair_name} - Depth {current_depth}: Average fidelity = {average_fidelity}")
-
-                # Check if the average fidelity meets the threshold
-                if average_fidelity >= target_fidelity_threshold:
+                average_relative_error = np.mean(all_relative_errors)
+                print(f"{pair_name} - Depth {current_depth}: Average relative error = {average_relative_error}")
+        
+                # Check if the average relative error meets the threshold
+                if average_relative_error <= target_error_threshold:
                     min_depths[pair_name] = current_depth
                     converged = True
-
-                    # Identify the run with the highest fidelity at this depth
-                    best_run_index = np.argmax(fidelities)
-                    best_fidelity = fidelities[best_run_index]
-                    best_zeromode = all_zeromodes[best_run_index]
+                    
+                    # Identify the run with the lowest relative error at this depth
+                    best_run_index = np.argmin(all_relative_errors)
+                    best_error = all_relative_errors[best_run_index]
+                    # best_zeromode = all_zeromodes[best_run_index]
                     best_function_calls = function_calls[best_run_index]
-
+                    
                     # Print the run number and highest fidelity at optimal depth
-                    print(f"Optimal depth {current_depth} for {pair_name} achieved highest fidelity = {best_fidelity}")
-                    print(f"Run number with highest fidelity: {best_run_index + 1}")
-
+                    print(f"Optimal depth {current_depth} for {pair_name} achieved lowest relative error = {best_error}")
+                    print(f"Run number with lowest relative error: {best_run_index + 1}")
+                    
                     # Calculate gate count and circuit depth for the ansatz at this depth
                     decomposed_ansatz = ansatz.decompose()  # Decompose to get actual gate operations
                     gate_count_dict = decomposed_ansatz.count_ops()
                     total_gates = sum(gate_count_dict.values())
                     circuit_depth = decomposed_ansatz.depth()
-
-                    # Store zeromode and resource information
-                    zeromodes[pair_name] = best_zeromode
+                    
+                    # Store relative error and resource information
+                    relative_errors[pair_name] = best_error
                     resource_info[pair_name] = {
                         'gate_count': total_gates,
                         'circuit_depth': circuit_depth,
                         'function_calls': best_function_calls
                     }
 
-                    print(f"Zeromode at optimal fidelity for {pair_name}: {best_zeromode}")
+                    print(f"Relative error at optimal run for {pair_name}: {best_error}")
                     print(f"Resource estimates for {pair_name}: Gate count = {total_gates}, Circuit depth = {circuit_depth}, Function calls = {best_function_calls}")
-
+                    
                     break  # Exit the loop if the threshold is met
-
+        
                 current_depth += 1  # Increase depth and try again
-
+            
             # If the loop finishes and no convergence occurs, mark as "did not converge"
             if not converged:
                 min_depths[pair_name] = "Did not converge"
-                zeromodes[pair_name] = "Did not converge"
+                relative_errors[pair_name] = "Did not converge"
                 resource_info[pair_name] = {
                     'gate_count': "N/A",
                     'circuit_depth': "N/A",
                     'function_calls': "N/A"
                 }
                 print(f"{pair_name} did not converge within {max_depth} depths.")
-
-    return min_depths, zeromodes, resource_info
+    
+    return min_depths, relative_errors, resource_info
 
 ## Running for hardware experiments
 
@@ -530,10 +541,11 @@ def recover_eigenvalues_and_zeromodes(matrix, optimizers, fixed_depth, fixed_sho
 
 ## Running VQE for multiple ansatz depths (no benchmarks set) --- state vector simulations
 
-def analyze_ansatz_performance(matrix, zeromode_classic, optimizer, num_qubits, max_depth):
+def analyze_ansatz_performance(matrix, zeromode_classic, optimizer, num_qubits, max_depth, classical_expectation, nmax, L):
 
     # Initialize dictionaries to store results
     zeromodes = {}
+    relative_errors = {} # To store relative errors
     metrics = {}  # To store fidelity and function call counts
 
     optimizer_name = optimizer.__class__.__name__
@@ -555,6 +567,7 @@ def analyze_ansatz_performance(matrix, zeromode_classic, optimizer, num_qubits, 
         # Initialize dictionaries to store depth-specific results
         zeromodes[pair_name] = {}
         metrics[pair_name] = {}
+        relative_errors[pair_name] = {}
 
         for current_depth in range(1, max_depth + 1):
             # Set `reps` (depth) for the current ansatz
@@ -564,24 +577,27 @@ def analyze_ansatz_performance(matrix, zeromode_classic, optimizer, num_qubits, 
             fidelities = []
             function_calls = []  # To track the number of function calls for each run
             all_zeromodes = []  # To store all zeromodes for the depth
+            all_relative_errors = [] # To track all relative errors for the depth
 
-            # Perform multiple independent VQE runs to calculate fidelity and resource usage
-            for run in range(6):  # Number of independent runs
+            # Perform multiple independent VQE runs to calculate fidelity, relative error, and resource usage
+            for run in range(10):  # Number of independent runs
                 seed = run + 1  # Set a unique seed for each run
 
                 # Run VQE
-                zeromode, fidelity_value, function_call_count = run_vqe_ansatz_analysis(
+                zeromode, fidelity_value, error, function_call_count = run_vqe_ansatz_analysis(
                     matrix=matrix, ansatz=ansatz, optimizer=optimizer, seed=seed,
-                    exact_ground_state=zeromode_classic)
+                    exact_ground_state=zeromode_classic, classical_expectation=classical_expectation, nmax=nmax, L=L)
 
                 # Append results
                 fidelities.append(fidelity_value)
                 function_calls.append(function_call_count)
                 all_zeromodes.append(zeromode)
+                all_relative_errors.append(error)
 
-            # Identify the run with the highest fidelity at this depth
-            best_run_index = np.argmax(fidelities)
+            # Identify the run with the lowest relative error at this depth
+            best_run_index = np.argmin(all_relative_errors)
             best_fidelity = fidelities[best_run_index]
+            best_relative_error = all_relative_errors[best_run_index]
             best_zeromode = all_zeromodes[best_run_index]
             best_function_calls = function_calls[best_run_index]
 
@@ -591,11 +607,12 @@ def analyze_ansatz_performance(matrix, zeromode_classic, optimizer, num_qubits, 
                 'fidelity': best_fidelity,
                 'function_calls': best_function_calls
             }
+            relative_errors[pair_name][current_depth] = best_relative_error
 
             print(f"{pair_name} - Depth {current_depth}: Best fidelity = {best_fidelity}, Function calls = {best_function_calls}, \
-            Best zeromode: {best_zeromode}")
+            Best zeromode: {best_zeromode}, Lowest relative error: {best_relative_error}")
 
-    return zeromodes, metrics
+    return zeromodes, relative_errors, metrics
 
 ## Theoretical estimation of the state fidelities
 ### Extracting the number of single- and two-qubit gates in the variational ansatz
