@@ -70,7 +70,7 @@ def cost_func_estimator(params, ansatz, hamiltonian, estimator):
 
     return cost
 
-def run_qaoa_analysis(matrix, seed, depth, exact_ground_state):
+def run_qaoa_analysis(matrix, seed, depth, exact_ground_state, classical_expectation, nmax, L):
 
     # Get the Pauli-decomposed form of the operator and initialize a random seed
     qub_hamiltonian = SparsePauliOp.from_operator(matrix)
@@ -125,4 +125,193 @@ def run_qaoa_analysis(matrix, seed, depth, exact_ground_state):
         quantum_statevector = qaoa_statevector_imag
         fidelity_value = fidelity_imag
 
-    return ansatz, quantum_statevector, fidelity_value, func_calls
+    # Compute <x^2>
+    x_quantum, y_quantum = get_pdf(nmax, x, dx, L, shift = 0, zeromode_qpe = quantum_statevector, normalize = True, make_even = True)
+    quantum_expectation = compute_expectation_x_squared_simpson(x_quantum, y_quantum, 2)
+    error = compute_errors(classical_expectation, quantum_expectation)
+
+    return ansatz, quantum_statevector, fidelity_value, error, func_calls
+
+def find_minimum_qaoa_layers(matrix, exact_ground_state, error_threshold, classical_expectation, nmax, L):
+    """
+    Dynamically finds the minimum number of QAOA layers needed to reach a target error.
+
+    Parameters:
+        matrix (Operator): The Hamiltonian operator.
+        exact_ground_state (array): Classical ground state array.
+        error_threshold (float): Target error threshold to reach.
+        classical_expectation (float): <x^2> obtained via exact diagonalization.
+        nmax (int): Basis size of Hermite polynomials. 
+        L (float): Characteristic length scale. 
+
+    Returns:
+        dict: {
+            'depth': optimal number of layers,
+            'zeromode': best zeromode at that depth, 
+            'relative error': lowest relative error at that depth, 
+            'fidelity': best fidelity at that depth,
+            'gate_count': total gate count of best circuit,
+            'circuit_depth': depth of best circuit,
+            'func_calls': number of optimizer evaluations,
+        }
+    """
+    # Initialize
+    depth = 1  # start with 1 layer
+    max_depth = 10
+
+    while depth <= max_depth:
+        fidelities = []
+        relative_errors = []
+        results_per_seed = []
+
+        print(f"Trying depth = {depth}...")
+
+        for run in range(10):  # 10 independent runs
+            try:
+                seed = run + 1
+                ansatz, quantum_statevector, fidelity, error, func_calls = run_qaoa_analysis(
+                    matrix, seed, depth, exact_ground_state, classical_expectation, nmax, L
+                )
+                fidelities.append(fidelity)
+                relative_errors.append(error)
+                results_per_seed.append((quantum_statevector, fidelity, error, func_calls, ansatz, seed))
+            except Exception as e:
+                print(f"Depth {depth}, Seed {seed}: Error - {e}")
+                continue
+
+        if not relative_errors:
+            print(f"No valid runs at depth = {depth}")
+            depth += 1
+            continue
+
+        avg_relative_error = np.mean(relative_errors)
+        print(f"Average relative error at depth {depth}: {avg_relative_error:.5f}")
+
+        if avg_relative_error <= error_threshold:
+            # Select best run
+            best_run = min(results_per_seed, key=lambda x: x[2])
+            best_zeromode, best_fidelity, lowest_error, best_func_calls, best_ansatz, best_seed = best_run
+
+            # Print the run number and lowest relative error at optimal depth
+            print(f"Optimal depth {depth} achieved lowest relative error = {lowest_error}")
+            print(f"Run number with lowest relative error: {best_seed}")
+            
+            # Get resource estimates
+            decomposed_ansatz = best_ansatz.decompose()
+            gate_count_dict = decomposed_ansatz.count_ops()
+            total_gates = sum(gate_count_dict.values())
+            circuit_depth = decomposed_ansatz.depth()
+
+            print(f"Zeromode at optimal relative error: {best_zeromode}")
+            print(f"Resource estimates: Gate count = {total_gates}, Circuit depth = {circuit_depth}, Function calls = {best_func_calls}")
+
+            return {
+                "depth": depth,
+                "zeromode": best_zeromode,
+                "relative error": lowest_error, 
+                "fidelity": best_fidelity,
+                "gate_count": total_gates,
+                "circuit_depth": circuit_depth,
+                "func_calls": best_func_calls
+            }
+
+        depth += 1  # Try next depth
+
+    # If target relative error not met within max depth
+    return {
+        "depth": "not converged",
+        "zeromode": "not converged",
+        "relative error": "not converged", 
+        "fidelity": "not converged",
+        "gate_count": "not converged",
+        "circuit_depth": "not converged",
+        "func_calls": "not converged"
+    }
+
+def run_qaoa_multiple_depths(matrix, exact_ground_state, max_depth, classical_expectation, nmax, L):
+    """
+    Runs QAOA for depths from 1 to max_depth.
+    For each depth, performs 10 independent runs and returns data from the run
+    that yields the lowest relative error compared to the classical ground state.
+
+    Parameters:
+        matrix (Operator): The Hamiltonian operator.
+        exact_ground_state (array): Classical ground state array.
+        max_depth (int): Maximum number of QAOA layers to try.
+        classical_expectation (float): <x^2> obtained via exact diagonalization. 
+        nmax (int): Basis size of Hermite polynomials. 
+        L (float): Characteristic length scale. 
+
+    Returns:
+        dict: A dictionary with depth as key and result dictionary as value.
+              Each result dictionary contains:
+              {
+                'zeromode': best zeromode at that depth,
+                'lowest error': lowest relative error at that depth,  
+                'gate_count': total gate count of best circuit,
+                'circuit_depth': depth of best circuit,
+                'func_calls': number of optimizer evaluations,
+                'seed': random seed that gave the best result
+              }
+    """
+    # Initialize 
+    results_by_depth = {}
+
+    for depth in range(1, max_depth + 1):
+        print(f"\nRunning QAOA at depth = {depth}")
+        fidelities = []
+        relative_errors = []
+        results_per_seed_fidelities = []
+        results_per_seed_errors = []
+        
+        for run in range(10):  # 10 independent runs
+            seed = run + 1
+            try:
+                ansatz, quantum_statevector, fidelity, error, func_calls = run_qaoa_analysis(
+                    matrix, seed, depth, exact_ground_state, classical_expectation, nmax, L
+                )
+                fidelities.append(fidelity)
+                relative_errors.append(error)
+                
+                results_per_seed_fidelities.append((quantum_statevector, fidelity, func_calls, ansatz, seed))
+                results_per_seed_errors.append((quantum_statevector, error, func_calls, ansatz, seed))
+            except Exception as e:
+                print(f"Depth {depth}, Seed {seed}: Error - {e}")
+                continue
+
+        if not relative_errors:
+            print(f"No valid runs at depth {depth}")
+            results_by_depth[depth] = {
+                "zeromode_qaoa": "error",
+                "relative_error": "error", 
+                "gate_count": "error",
+                "circuit_depth": "error",
+                "func_calls": "error",
+                "seed": "error"
+            }
+            continue
+
+        # Get best run
+        best_run = min(results_per_seed_errors, key=lambda x: x[1]) # compare the relative errors
+        best_zeromode, best_error, best_func_calls, best_ansatz, best_seed = best_run
+
+        # Extract resource estimates
+        decomposed_ansatz = best_ansatz.decompose()
+        gate_count_dict = decomposed_ansatz.count_ops()
+        total_gates = sum(gate_count_dict.values())
+        circuit_depth = decomposed_ansatz.depth()
+
+        # Print the highest fidelity at the corresponding depth
+        print(f"Lowest relative error at depth {depth}: {float(best_error):.5f} (Seed {best_seed})")
+        print(f"The best zeromode at depth {depth} is: {best_zeromode}")
+
+        results_by_depth[depth] = {
+            "zeromode_qaoa": best_zeromode,
+            "lowest error": best_error,
+            "gate_count": total_gates,
+            "circuit_depth": circuit_depth,
+            "func_calls": best_func_calls,
+            "seed": best_seed
+        }
+
+    return results_by_depth
