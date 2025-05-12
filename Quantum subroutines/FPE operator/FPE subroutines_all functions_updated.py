@@ -422,7 +422,7 @@ def estimate_resources(matrix, zeromode_classic, optimizers, num_qubits, target_
                     function_calls.append(function_call_count)
                     all_relative_errors.append(error)
                 
-                # Calculate the average fidelity over the runs
+                # Calculate the average relative error over the runs
                 average_relative_error = np.mean(all_relative_errors)
                 print(f"{pair_name} - Depth {current_depth}: Average relative error = {average_relative_error}")
         
